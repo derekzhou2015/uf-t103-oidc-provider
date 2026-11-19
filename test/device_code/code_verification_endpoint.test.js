@@ -164,7 +164,7 @@ describe('POST code_verification endpoint w/o verification', () => {
       .type('form')
       .expect(200)
       .expect(new RegExp(`<form id="op.deviceInputForm" novalidate method="post" action="http://127.0.0.1:\\d+${fixture3.suitePath('/device')}">`))
-      .expect(/<p class="red">The code you entered is incorrect\. Try again<\/p>/);
+      .expect(/<p class="red">This code has expired\. Start the sign-in again on your device<\/p>/);
 
     assert.equal(spy.calledOnce, true);
     sinon.assert.calledWithMatch(spy, any, any, any, sinon.match((err) => {
@@ -192,7 +192,7 @@ describe('POST code_verification endpoint w/o verification', () => {
       .type('form')
       .expect(200)
       .expect(new RegExp(`<form id="op.deviceInputForm" novalidate method="post" action="http://127.0.0.1:\\d+${fixture3.suitePath('/device')}">`))
-      .expect(/<p class="red">The code you entered is incorrect\. Try again<\/p>/);
+      .expect(/<p class="red">This code has already been used and cannot be confirmed again<\/p>/);
 
     assert.equal(spy.calledOnce, true);
     sinon.assert.calledWithMatch(spy, any, any, any, sinon.match((err) => {

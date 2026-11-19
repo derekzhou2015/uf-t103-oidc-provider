@@ -35,6 +35,7 @@ describe('opaque storage', () => {
   const userCode = '1384-3217';
   const deviceInfo = { foo: 'bar' };
   const inFlight = true;
+  const inFlightAt = epochTime();
   const s256 = '_gPMqAT8BELhXwBa2nIT0OvdWtQCiF_g09nAyHhgCe0';
   const resource = 'urn:foo:bar';
   const policies = ['foo'];
@@ -51,7 +52,7 @@ describe('opaque storage', () => {
     accountId, claims, grantId, scope, sid, consumed, acr, amr, authTime, nonce,
     redirectUri, codeChallenge, codeChallengeMethod, aud, error, errorDescription, params,
     userCode, deviceInfo, gty, resource, policies, sessionUid, expiresWithSession,
-    'x5t#S256': s256, inFlight, iiat, rotations, extra, jkt: s256, dpopJkt,
+    'x5t#S256': s256, inFlight, inFlightAt, iiat, rotations, extra, jkt: s256, dpopJkt,
   };
 
   afterEach(() => sinon.restore(), { timeout: 3000 });
@@ -160,6 +161,7 @@ describe('opaque storage', () => {
       sessionUid,
       expiresWithSession,
       inFlight,
+      inFlightAt,
     });
   });
 

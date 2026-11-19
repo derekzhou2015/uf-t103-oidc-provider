@@ -30,7 +30,7 @@ const payloads = {
   ClientCredentials: [...token, ...sender, 'aud', 'extra', 'rar', 'scope'],
   DeviceCode: [
     ...token, 'consumed', 'grantId', 'attestationJkt', ...session, ...auth,
-    'error', 'errorDescription', 'params', 'rar', 'userCode', 'inFlight', 'deviceInfo',
+    'error', 'errorDescription', 'params', 'rar', 'userCode', 'inFlight', 'inFlightAt', 'deviceInfo',
   ],
   BackchannelAuthenticationRequest: [
     ...token, 'consumed', 'grantId', 'attestationJkt', ...session, ...auth,
