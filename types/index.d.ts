@@ -511,6 +511,7 @@ declare class DeviceCode extends BaseToken {
     params?: UnknownObject | undefined;
     userCode: string;
     inFlight?: boolean | undefined;
+    interactionUid?: string | undefined;
     deviceInfo?: UnknownObject | undefined;
     accountId?: string | undefined;
     acr?: string | undefined;

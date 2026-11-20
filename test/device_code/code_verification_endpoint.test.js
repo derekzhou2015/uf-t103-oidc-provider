@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createSandbox } from 'sinon';
 import timekeeper from 'timekeeper';
 
+import nanoid from '../../lib/helpers/nanoid.js';
+import epochTime from '../../lib/helpers/epoch_time.js';
 import bootstrap, { passInteractionChecks } from '../test_helper.js';
 
 const sinon = createSandbox();
@@ -466,5 +468,273 @@ describe('POST code_verification endpoint w/ verification', () => {
 
       assert.equal(spy.calledOnce, true);
     });
+  });
+});
+
+describe('POST code_verification endpoint re-entry after an interrupted confirmation', () => {
+  const fixture6 = {};
+
+  before(bootstrap(import.meta.url, fixture6), { timeout: 3000 });
+  before(() => fixture6.agent.get(route), { timeout: 3000 }); // establish a session
+  afterEach(() => timekeeper.reset(), { timeout: 3000 });
+  afterEach(() => sinon.restore(), { timeout: 3000 });
+
+  const xsrf = 'foo';
+
+  beforeEach(() => {
+    fixture6.getSession().state = { secret: xsrf };
+  }, { timeout: 3000 });
+
+  const params = { scope: 'openid', client_id: 'client' };
+
+  function stuckCode(userCode, extra = {}) {
+    return new fixture6.provider.DeviceCode({
+      clientId: 'client',
+      userCode,
+      inFlight: true,
+      params,
+      ...extra,
+    }).save();
+  }
+
+  it('redirects a re-entry to the still resumable interaction', { timeout: 3000 }, async () => {
+    const uid = nanoid();
+    const jti = await stuckCode('STUCKONE', { interactionUid: uid });
+    await new fixture6.provider.Interaction(uid, {
+      uid,
+      deviceCode: jti,
+      prompt: { name: 'login', reasons: ['no_session'], details: {} },
+      params,
+    }).save(600);
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-ONE' })
+      .type('form')
+      .expect(303)
+      .expect('location', new RegExp(`/device/${uid}$`));
+
+    // the in-flight marker is NOT released while the interaction is alive
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKONE');
+    assert.equal(code.inFlight, true);
+    assert.equal(code.interactionUid, uid);
+    assert.ok(!('accountId' in Object(code)));
+  });
+
+  it('redirects a repeated confirm submission to the in-flight interaction instead of starting a second authorization', { timeout: 3000 }, async () => {
+    const uid = nanoid();
+    const jti = await stuckCode('STUCKTWO', { interactionUid: uid });
+    await new fixture6.provider.Interaction(uid, {
+      uid,
+      deviceCode: jti,
+      prompt: { name: 'login', reasons: ['no_session'], details: {} },
+      params,
+    }).save(600);
+
+    const spy = sinon.spy(i(fixture6.provider).features.deviceFlow, 'successSource');
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-TWO', confirm: 'yes' })
+      .type('form')
+      .expect(303)
+      .expect('location', new RegExp(`/device/${uid}$`));
+
+    // no second authorization ran and the code is untouched
+    assert.equal(spy.called, false);
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKTWO');
+    assert.equal(code.inFlight, true);
+    assert.equal(code.interactionUid, uid);
+    assert.ok(!('accountId' in Object(code)));
+  });
+
+  it('releases the stale in-flight marker when the interaction session is gone and re-renders the confirmation', { timeout: 3000 }, async () => {
+    const spy = sinon.spy(i(fixture6.provider).features.deviceFlow, 'userCodeConfirmSource');
+
+    await stuckCode('STUCKTHREE', { interactionUid: 'gone' });
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-THREE' })
+      .type('form')
+      .expect(200)
+      .expect(new RegExp(`<form id="op.deviceConfirmForm" method="post" action="http://127.0.0.1:\\d+${fixture6.suitePath('/device')}">`));
+
+    assert.equal(spy.calledOnce, true);
+
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKTHREE');
+    assert.ok(!('inFlight' in Object(code)));
+    assert.ok(!('interactionUid' in Object(code)));
+  });
+
+  it('releases an in-flight marker that never got an interaction session', { timeout: 3000 }, async () => {
+    const spy = sinon.spy(i(fixture6.provider).features.deviceFlow, 'userCodeConfirmSource');
+
+    await stuckCode('STUCKFOUR');
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-FOUR' })
+      .type('form')
+      .expect(200)
+      .expect(new RegExp(`<form id="op.deviceConfirmForm" method="post" action="http://127.0.0.1:\\d+${fixture6.suitePath('/device')}">`));
+
+    assert.equal(spy.calledOnce, true);
+
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKFOUR');
+    assert.ok(!('inFlight' in Object(code)));
+  });
+
+  it('lets a confirmation through once the stale marker is released', { timeout: 3000 }, async () => {
+    await stuckCode('STUCKFIVE', { interactionUid: 'gone' });
+
+    // logged out, so the released confirmation starts a fresh interaction
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-FIVE', confirm: 'yes' })
+      .type('form')
+      .expect(303)
+      .expect('location', /\/interaction\//);
+
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKFIVE');
+    assert.equal(code.inFlight, true);
+    assert.ok(code.interactionUid);
+    assert.notEqual(code.interactionUid, 'gone');
+    assert.ok(await fixture6.provider.Interaction.find(code.interactionUid));
+  });
+
+  it('allows an interrupted code to be aborted once its flow is gone', { timeout: 3000 }, async () => {
+    await stuckCode('STUCKSIX');
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-SIX', abort: 'yes' })
+      .type('form')
+      .expect(200)
+      .expect(/The Sign-in request was interrupted/);
+
+    const code = await fixture6.provider.DeviceCode.findByUserCode('STUCKSIX');
+    ((actual) => { assert.ok('error' in Object(actual)); assert.equal(actual.error, 'access_denied'); })(code);
+    assert.ok(!('accountId' in Object(code)));
+  });
+
+  it('still rejects codes that already have a final outcome (error)', { timeout: 3000 }, async () => {
+    const spy = sinon.spy(i(fixture6.provider).features.deviceFlow, 'userCodeInputSource');
+
+    await new fixture6.provider.DeviceCode({
+      clientId: 'client',
+      userCode: 'STUCKSEVEN',
+      error: 'access_denied',
+      errorDescription: 'End-User aborted interaction',
+      params,
+    }).save();
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-SEVEN' })
+      .type('form')
+      .expect(200)
+      .expect(/<p class="red">The code you entered is incorrect\. Try again<\/p>/);
+
+    assert.equal(spy.calledOnce, true);
+    sinon.assert.calledWithMatch(spy, any, any, any, sinon.match((err) => {
+      assert.equal(err.name, 'AlreadyUsedError');
+      return true;
+    }));
+  });
+
+  it('still rejects expired in-flight codes as expired', { timeout: 3000 }, async () => {
+    const spy = sinon.spy(i(fixture6.provider).features.deviceFlow, 'userCodeInputSource');
+
+    await stuckCode('STUCKEIGHT');
+
+    timekeeper.travel(Date.now() + (((10 * 60) + 10) * 1000));
+
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-EIGHT' })
+      .type('form')
+      .expect(200)
+      .expect(/<p class="red">The code you entered is incorrect\. Try again<\/p>/);
+
+    assert.equal(spy.calledOnce, true);
+    sinon.assert.calledWithMatch(spy, any, any, any, sinon.match((err) => {
+      assert.equal(err.name, 'ExpiredError');
+      return true;
+    }));
+  });
+
+  it('recovers the full flow after the End-User confirms and leaves mid-flow', { timeout: 3000 }, async () => {
+    // the device gets its codes ...
+    const deviceCode = new fixture6.provider.DeviceCode({
+      clientId: 'client',
+      userCode: 'STUCKNINE',
+      params,
+    });
+    const deviceCodeValue = await deviceCode.save();
+
+    // ... the End-User confirms and leaves before finishing the sign-in
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-NINE', confirm: 'yes' })
+      .type('form')
+      .expect(303)
+      .expect('location', /\/interaction\//);
+
+    let code = await fixture6.provider.DeviceCode.findByUserCode('STUCKNINE');
+    assert.equal(code.inFlight, true);
+    assert.ok(code.interactionUid);
+    const { interactionUid } = code;
+
+    // the device keeps polling and is told to keep waiting
+    await fixture6.agent.post('/token')
+      .type('form')
+      .send({
+        client_id: 'client',
+        device_code: deviceCodeValue,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      })
+      .expect(400)
+      .expect((response) => {
+        assert.equal(response.body.error, 'authorization_pending');
+      });
+
+    // the End-User comes back with the same code and is sent back to their flow
+    fixture6.getSession().state = { secret: xsrf }; // the confirm POST consumed it
+    await fixture6.agent.post(route)
+      .send({ xsrf, user_code: 'STUCK-NINE' })
+      .type('form')
+      .expect(303)
+      .expect('location', new RegExp(`/device/${interactionUid}$`));
+
+    // the End-User finishes the sign-in (login + consent, the latter
+    // persists the grant like the consent interaction would) ...
+    const grant = new fixture6.provider.Grant({
+      accountId: 'sub-stuck-nine',
+      clientId: 'client',
+    });
+    grant.addOIDCScope('openid');
+    const grantId = await grant.save();
+
+    const interaction = await fixture6.provider.Interaction.find(interactionUid);
+    Object.assign(interaction, {
+      result: {
+        login: { accountId: 'sub-stuck-nine', ts: epochTime() },
+        consent: { grantId },
+      },
+    });
+    await interaction.persist();
+
+    await fixture6.agent.get(fixture6.suitePath(`/device/${interactionUid}`))
+      .expect(200)
+      .expect(/was successful/);
+
+    code = await fixture6.provider.DeviceCode.findByUserCode('STUCKNINE');
+    ((actual) => { assert.ok('accountId' in Object(actual)); assert.equal(actual.accountId, 'sub-stuck-nine'); })(code);
+
+    // ... and the device's next poll is issued tokens
+    await fixture6.agent.post('/token')
+      .type('form')
+      .send({
+        client_id: 'client',
+        device_code: deviceCodeValue,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      })
+      .expect(200)
+      .expect((response) => {
+        assert.ok(response.body.access_token);
+        assert.equal(response.body.token_type, 'Bearer');
+      });
   });
 });

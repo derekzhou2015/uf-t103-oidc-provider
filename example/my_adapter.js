@@ -78,6 +78,9 @@ class MyAdapter {
      * - deviceInfo {object} - [DeviceCode only] an object with details about the
      *     device_authorization_endpoint request
      * - inFlight {boolean} - [DeviceCode only]
+     * - interactionUid {string} - [DeviceCode only] uid of the Interaction session the
+     *     in-flight user code confirmation is being handled in, used to resume an
+     *     interrupted confirmation instead of rejecting a re-entry
      * - error {string} - [DeviceCode and BackchannelAuthenticationRequest only] - error from authnz to be
      *     returned to the polling client
      * - errorDescription {string} - [DeviceCode and BackchannelAuthenticationRequest only] - error_description

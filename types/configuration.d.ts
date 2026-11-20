@@ -232,6 +232,7 @@ export interface AdapterPayload extends AllClientMetadata {
     iat?: number | undefined;
     iiat?: number | undefined;
     inFlight?: boolean | undefined;
+    interactionUid?: string | undefined;
     jti?: string | undefined;
     kind?: string | undefined;
     lastSubmission?: InteractionResults | undefined;
